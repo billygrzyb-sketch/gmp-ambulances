@@ -724,6 +724,7 @@ svg.leaflet-image-layer.leaflet-interactive path {
   #toast { position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%); z-index: 3000; background: #0f172a; color: #fff; padding: 10px 18px; border-radius: 8px; font-weight: 700; display: none; max-width: 92vw; }
   .crosshair { cursor: crosshair !important; }
   .hidden { display: none !important; }
+  .route-on .leaflet-overlay-pane { opacity: .45; }
   .scrollarea { overflow-y: auto; -webkit-overflow-scrolling: touch; }
   .legend-swatch { display: inline-block; width: 14px; height: 14px; border-radius: 50%; border: 2px solid #fff; box-shadow: 0 0 0 1px #334155; vertical-align: middle; }
   /* RTL (Arabic): text flips, map itself stays LTR, panel stays on the left */
@@ -795,19 +796,21 @@ svg.leaflet-image-layer.leaflet-interactive path {
 
     <div class="tabpage" data-page="route">
       <div class="card space-y-2">
-        <div class="font-black text-slate-800">A</div>
-        <div class="flex gap-2 flex-wrap"><button class="btn btn-primary btn-sm flex-1" data-pick="A" data-i18n="pick_on_map">🎯 Cliquer sur la carte</button><select id="rt-amb-A" class="field !min-h-[36px] !py-1 !text-sm flex-1"></select></div>
-        <div id="rt-input-A"></div><div id="rt-sum-A" class="text-sm font-bold text-slate-700"></div>
+        <div class="font-black text-slate-800"><span class="badge" style="background:#2563eb">A</span> <span data-i18n="rt_vehicle">Véhicule / départ</span></div>
+        <div class="flex gap-2 flex-wrap"><select id="rt-amb-A" class="field !min-h-[36px] !py-1 !text-sm flex-1"></select><button class="btn btn-primary btn-sm" data-pick="A" data-i18n="pick_on_map">🎯 Cliquer sur la carte</button></div>
+        <details class="text-sm"><summary class="cursor-pointer font-bold text-slate-600" data-i18n="rt_other_point">Autre point de départ (KP / GPS / repère)</summary><div id="rt-input-A" class="mt-2"></div></details>
+        <div id="rt-sum-A" class="text-sm font-bold text-slate-700"></div>
       </div>
       <div class="card mt-3 space-y-2">
-        <div class="font-black text-slate-800">B</div>
-        <div class="flex gap-2 flex-wrap"><button class="btn btn-primary btn-sm flex-1" data-pick="B" data-i18n="pick_on_map">🎯 Cliquer sur la carte</button><select id="rt-amb-B" class="field !min-h-[36px] !py-1 !text-sm flex-1"></select></div>
+        <div class="font-black text-slate-800"><span class="badge" style="background:#7c3aed">B</span> <span data-i18n="rt_destination">Destination</span></div>
+        <div class="flex gap-2 flex-wrap"><button id="btn-route-inc" class="btn btn-primary btn-sm flex-1" data-i18n="rt_use_incident">🚨 Lieu de l'incident</button><button class="btn btn-primary btn-sm flex-1" data-pick="B" data-i18n="pick_on_map">🎯 Cliquer sur la carte</button></div>
         <div id="rt-input-B"></div><div id="rt-sum-B" class="text-sm font-bold text-slate-700"></div>
       </div>
-      <div class="flex gap-2 mt-3">
+      <div class="flex gap-2 mt-3 items-center flex-wrap">
+        <label class="flex items-center gap-2 text-sm font-bold flex-1"><input type="checkbox" id="rt-roads-only" class="w-5 h-5"> <span data-i18n="rt_roads_only">Routes uniquement (éviter la piste ROW)</span></label>
         <button id="btn-route-swap" class="btn btn-dark btn-sm">⇅</button>
-        <button id="btn-route-clear" class="btn btn-dark btn-sm flex-1" data-i18n="clear">Effacer</button>
-        <button id="btn-route-osrm" class="btn btn-dark btn-sm flex-1" data-i18n="road_route">🌐 OSRM (public)</button>
+        <button id="btn-route-clear" class="btn btn-dark btn-sm" data-i18n="clear">Effacer</button>
+        <button id="btn-route-osrm" class="btn btn-dark btn-sm" data-i18n="road_route">🌐 OSRM (public)</button>
       </div>
       <div id="route-result" class="card mt-3 hidden"></div>
     </div>
@@ -1032,7 +1035,9 @@ const Router = (() => {
     for (let cx = Math.floor(Math.min(x1, x2) / CELL); cx <= Math.floor(Math.max(x1, x2) / CELL); cx++)
       for (let cy = Math.floor(Math.min(y1, y2) / CELL); cy <= Math.floor(Math.max(y1, y2) / CELL); cy++) { const k = cx + ',' + cy; if (!idx.has(k)) idx.set(k, []); idx.get(k).push(i); }
   });
-  const speedOf = cls => [Store.settings.speedHV, Store.settings.speedLV, Store.settings.speedROW][cls] || 30;
+  let roadsOnly = false;
+  const realSpeed = cls => [Store.settings.speedHV, Store.settings.speedLV, Store.settings.speedROW][cls] || 30;
+  const speedOf = cls => (cls === 2 && roadsOnly) ? 3 : realSpeed(cls);   // roads-only: ROW heavily penalised in the search (used only if unavoidable); displayed time always uses real speeds
   /** snap a lat/lon to the nearest edge (≤ maxM) -> {edge, t, dist, x, y} */
   function snap(lat, lon, maxM = 3000) {
     const u = Geo.toUTM(lat, lon), r = Math.ceil(maxM / CELL); let best = null;
@@ -1061,18 +1066,21 @@ const Router = (() => {
     return { time, dist, prev, pe };
   }
   /** route A -> B: {dist, time, coords[[lat,lon]], byClass{m}} or null */
-  function route(A, B) {
-    const sa = snap(A.lat, A.lon), sb = snap(B.lat, B.lon); if (!sa || !sb) return null;
+  function route(A, B, opts = {}) {
+    roadsOnly = !!opts.roadsOnly;
+    const sa = snap(A.lat, A.lon), sb = snap(B.lat, B.lon); if (!sa || !sb) { roadsOnly = false; return null; }
     const R = dijkstra(sa), [a2, b2, m2, c2] = G.edges[sb.edge], sp2 = speedOf(c2) / 3.6;
     const via = [[a2, m2 * sb.t], [b2, m2 * (1 - sb.t)]].map(([n, extra]) => ({ n, time: R.time[n] + extra / sp2, dist: R.dist[n] + extra })).sort((x, y) => x.time - y.time)[0];
-    if (!isFinite(via.time)) return null;
+    if (!isFinite(via.time)) { roadsOnly = false; return null; }
     const path = []; for (let n = via.n; n !== -1; n = R.prev[n]) path.push(n); path.reverse();
     const byClass = [0, 0, 0]; for (let i = 1; i < path.length; i++) byClass[G.edges[R.pe[path[i]]][3]] += G.edges[R.pe[path[i]]][2];
     byClass[G.edges[sa.edge][3]] += (path[0] === G.edges[sa.edge][0] ? sa.t : 1 - sa.t) * G.edges[sa.edge][2];
     byClass[c2] += via.n === a2 ? m2 * sb.t : m2 * (1 - sb.t);
     const ll = u => { const g = Geo.fromUTM(u[0], u[1]); return [g.lat, g.lon]; };
     const coords = [[A.lat, A.lon], ll([sa.x, sa.y]), ...path.map(n => G.nodes[n]), ll([sb.x, sb.y]), [B.lat, B.lon]];
-    return { dist: via.dist, time: via.time, coords, byClass, offA: sa.dist, offB: sb.dist };
+    roadsOnly = false;
+    const time = byClass.reduce((acc, m, c) => acc + m / (realSpeed(c) / 3.6), 0);
+    return { dist: via.dist, time, coords, byClass, offA: sa.dist, offB: sb.dist };
   }
   /** travel time from one source to many targets (nearest-ambulance ranking) */
   function toMany(src, targets) {
@@ -1093,7 +1101,7 @@ const Router = (() => {
  * ========================================================================== */
 const I18N = {
   fr: {
-    account: '👤 Compte', logout: 'Se déconnecter', users_title: '🔑 Utilisateurs autorisés', users_hint: "Seules les adresses de cette liste peuvent voir et modifier les données. Chaque personne crée ensuite son mot de passe sur l'écran de connexion.", user_add: '＋ Autoriser cette adresse', role_user: 'Utilisateur', role_admin: 'Admin', user_removed: 'Accès retiré', user_added: 'Adresse autorisée', confirm_user_remove: 'Retirer l\'accès de cette adresse ?', auth_title: 'Connexion', auth_email: 'E-mail', auth_pass: 'Mot de passe (8 caractères min.)', auth_name: 'Nom affiché', auth_login: 'Se connecter', auth_signup: 'Créer mon compte', auth_forgot: 'Mot de passe oublié', auth_send_reset: 'Envoyer le lien de réinitialisation', auth_no_account: 'Première connexion ? Créer un compte', auth_have_account: 'J\'ai déjà un compte', auth_sent_confirm: 'Compte créé. Si un e-mail de confirmation vous est envoyé, cliquez sur le lien puis connectez-vous.', auth_sent_reset: 'E-mail envoyé : ouvrez le lien pour choisir un nouveau mot de passe.', auth_not_allowed: 'Votre adresse n\'est pas (encore) autorisée. Demandez à l\'administrateur HSE de l\'ajouter, puis reconnectez-vous.', auth_newpass: 'Choisissez un nouveau mot de passe', auth_save_pass: 'Enregistrer le mot de passe', auth_hint: 'Accès réservé aux adresses autorisées par l\'administrateur HSE.', auth_err_bad: 'E-mail ou mot de passe incorrect', auth_err_unconfirmed: 'Adresse non confirmée : vérifiez votre boîte mail', auth_err_exists: 'Un compte existe déjà pour cette adresse', signed_in_as: 'Connecté en tant que', role: 'Rôle', pass_changed: 'Mot de passe modifié', photo: 'Photo', photo_take: '📷 Prendre / choisir', photo_remove: '✕ Retirer', photo_compressing: 'Compression…', photo_uploading: 'Envoi de la photo…', photo_upload_err: 'Photo non envoyée (réseau ?) – fiche enregistrée sans photo, réessayez plus tard', photo_err: 'Image illisible', app_title: 'Ambulances – GMP Pipelines', my_position: 'Ma position', mode_custom: 'Carte projet', mode_sat: 'Satellite', mode_osm: 'Plan (CARTO)',
+    account: '👤 Compte', logout: 'Se déconnecter', users_title: '🔑 Utilisateurs autorisés', users_hint: "Seules les adresses de cette liste peuvent voir et modifier les données. Chaque personne crée ensuite son mot de passe sur l'écran de connexion.", user_add: '＋ Autoriser cette adresse', role_user: 'Utilisateur', role_admin: 'Admin', user_removed: 'Accès retiré', user_added: 'Adresse autorisée', confirm_user_remove: 'Retirer l\'accès de cette adresse ?', auth_title: 'Connexion', auth_email: 'E-mail', auth_pass: 'Mot de passe (8 caractères min.)', auth_name: 'Nom affiché', auth_login: 'Se connecter', auth_signup: 'Créer mon compte', auth_forgot: 'Mot de passe oublié', auth_send_reset: 'Envoyer le lien de réinitialisation', auth_no_account: 'Première connexion ? Créer un compte', auth_have_account: 'J\'ai déjà un compte', auth_sent_confirm: 'Compte créé. Si un e-mail de confirmation vous est envoyé, cliquez sur le lien puis connectez-vous.', auth_sent_reset: 'E-mail envoyé : ouvrez le lien pour choisir un nouveau mot de passe.', auth_not_allowed: 'Votre adresse n\'est pas (encore) autorisée. Demandez à l\'administrateur HSE de l\'ajouter, puis reconnectez-vous.', auth_newpass: 'Choisissez un nouveau mot de passe', auth_save_pass: 'Enregistrer le mot de passe', auth_hint: 'Accès réservé aux adresses autorisées par l\'administrateur HSE.', auth_err_bad: 'E-mail ou mot de passe incorrect', auth_err_unconfirmed: 'Adresse non confirmée : vérifiez votre boîte mail', auth_err_exists: 'Un compte existe déjà pour cette adresse', signed_in_as: 'Connecté en tant que', role: 'Rôle', pass_changed: 'Mot de passe modifié', photo: 'Photo', photo_take: '📷 Prendre / choisir', photo_remove: '✕ Retirer', photo_compressing: 'Compression…', photo_uploading: 'Envoi de la photo…', photo_upload_err: 'Photo non envoyée (réseau ?) – fiche enregistrée sans photo, réessayez plus tard', photo_err: 'Image illisible', rt_vehicle: 'Véhicule / départ', rt_destination: 'Destination', rt_use_incident: "🚨 Lieu de l'incident", rt_other_point: 'Autre point de départ (KP / GPS / repère)', rt_roads_only: 'Routes uniquement (éviter la piste ROW)', app_title: 'Ambulances – GMP Pipelines', my_position: 'Ma position', mode_custom: 'Carte projet', mode_sat: 'Satellite', mode_osm: 'Plan (CARTO)',
     tab_fleet: 'Flotte', tab_nearest: 'Plus proche', tab_route: 'Trajet', tab_manage: 'Gestion', fleet_list: 'Liste des ambulances', legend: 'Légende',
     st_available: 'Disponible', st_standby: 'En attente', st_on_mission: 'En mission', st_out_of_service: 'Hors service', lg_hv: 'Route PL (HV)', lg_lv: 'Route VL (LV)',
     incident_loc: "Lieu de l'incident", pick_on_map: '🎯 Cliquer sur la carte', available_only: 'Disponibles uniquement', clear: 'Effacer',
@@ -1116,7 +1124,7 @@ const I18N = {
     lm_bvs: 'Chambre de vanne', lm_cp: 'Point de contrôle', lm_camp: 'Camp', lm_plant: 'Site', lm_crossing: 'Franchissement', lm_bore: 'Forage (auger bore)', lm_hdd: 'HDD', remote_deleted: 'Supprimé par un collègue', remote_updated: 'Mise à jour reçue'
   },
   en: {
-    account: '👤 Account', logout: 'Sign out', users_title: '🔑 Authorised users', users_hint: 'Only the addresses in this list can see and edit the data. Each person then creates their own password on the sign-in screen.', user_add: '＋ Authorise this address', role_user: 'User', role_admin: 'Admin', user_removed: 'Access removed', user_added: 'Address authorised', confirm_user_remove: 'Remove access for this address?', auth_title: 'Sign in', auth_email: 'E-mail', auth_pass: 'Password (min. 8 characters)', auth_name: 'Display name', auth_login: 'Sign in', auth_signup: 'Create my account', auth_forgot: 'Forgot password', auth_send_reset: 'Send reset link', auth_no_account: 'First time? Create an account', auth_have_account: 'I already have an account', auth_sent_confirm: 'Account created. If a confirmation e-mail is sent to you, click its link, then sign in.', auth_sent_reset: 'E-mail sent: open the link to choose a new password.', auth_not_allowed: 'Your address is not (yet) authorised. Ask the HSE administrator to add it, then sign in again.', auth_newpass: 'Choose a new password', auth_save_pass: 'Save password', auth_hint: 'Access restricted to addresses authorised by the HSE administrator.', auth_err_bad: 'Incorrect e-mail or password', auth_err_unconfirmed: 'Address not confirmed: check your mailbox', auth_err_exists: 'An account already exists for this address', signed_in_as: 'Signed in as', role: 'Role', pass_changed: 'Password changed', photo: 'Photo', photo_take: '📷 Take / choose', photo_remove: '✕ Remove', photo_compressing: 'Compressing…', photo_uploading: 'Uploading photo…', photo_upload_err: 'Photo not uploaded (network?) – record saved without photo, try again later', photo_err: 'Unreadable image', app_title: 'Ambulances – GMP Pipelines', my_position: 'My position', mode_custom: 'Project map', mode_sat: 'Satellite', mode_osm: 'Plan (CARTO)',
+    account: '👤 Account', logout: 'Sign out', users_title: '🔑 Authorised users', users_hint: 'Only the addresses in this list can see and edit the data. Each person then creates their own password on the sign-in screen.', user_add: '＋ Authorise this address', role_user: 'User', role_admin: 'Admin', user_removed: 'Access removed', user_added: 'Address authorised', confirm_user_remove: 'Remove access for this address?', auth_title: 'Sign in', auth_email: 'E-mail', auth_pass: 'Password (min. 8 characters)', auth_name: 'Display name', auth_login: 'Sign in', auth_signup: 'Create my account', auth_forgot: 'Forgot password', auth_send_reset: 'Send reset link', auth_no_account: 'First time? Create an account', auth_have_account: 'I already have an account', auth_sent_confirm: 'Account created. If a confirmation e-mail is sent to you, click its link, then sign in.', auth_sent_reset: 'E-mail sent: open the link to choose a new password.', auth_not_allowed: 'Your address is not (yet) authorised. Ask the HSE administrator to add it, then sign in again.', auth_newpass: 'Choose a new password', auth_save_pass: 'Save password', auth_hint: 'Access restricted to addresses authorised by the HSE administrator.', auth_err_bad: 'Incorrect e-mail or password', auth_err_unconfirmed: 'Address not confirmed: check your mailbox', auth_err_exists: 'An account already exists for this address', signed_in_as: 'Signed in as', role: 'Role', pass_changed: 'Password changed', photo: 'Photo', photo_take: '📷 Take / choose', photo_remove: '✕ Remove', photo_compressing: 'Compressing…', photo_uploading: 'Uploading photo…', photo_upload_err: 'Photo not uploaded (network?) – record saved without photo, try again later', photo_err: 'Unreadable image', rt_vehicle: 'Vehicle / departure', rt_destination: 'Destination', rt_use_incident: '🚨 Incident location', rt_other_point: 'Other departure point (KP / GPS / landmark)', rt_roads_only: 'Roads only (avoid ROW track)', app_title: 'Ambulances – GMP Pipelines', my_position: 'My position', mode_custom: 'Project map', mode_sat: 'Satellite', mode_osm: 'Plan (CARTO)',
     tab_fleet: 'Fleet', tab_nearest: 'Nearest', tab_route: 'Route', tab_manage: 'Manage', fleet_list: 'Ambulance list', legend: 'Legend',
     st_available: 'Available', st_standby: 'Standby', st_on_mission: 'On mission', st_out_of_service: 'Out of service', lg_hv: 'HV road', lg_lv: 'LV road',
     incident_loc: 'Incident location', pick_on_map: '🎯 Pick on map', available_only: 'Available only', clear: 'Clear',
@@ -1139,7 +1147,7 @@ const I18N = {
     lm_bvs: 'Valve chamber', lm_cp: 'Control point', lm_camp: 'Camp', lm_plant: 'Site', lm_crossing: 'Crossing', lm_bore: 'Auger bore', lm_hdd: 'HDD', remote_deleted: 'Deleted by a colleague', remote_updated: 'Update received'
   },
   zh: {
-    account: '👤 账户', logout: '退出登录', users_title: '🔑 授权用户', users_hint: '只有此列表中的邮箱才能查看和修改数据。每个人之后在登录页面自行设置密码。', user_add: '＋ 授权此邮箱', role_user: '用户', role_admin: '管理员', user_removed: '已移除权限', user_added: '邮箱已授权', confirm_user_remove: '移除此邮箱的访问权限？', auth_title: '登录', auth_email: '电子邮箱', auth_pass: '密码（至少 8 个字符）', auth_name: '显示名称', auth_login: '登录', auth_signup: '创建我的账户', auth_forgot: '忘记密码', auth_send_reset: '发送重置链接', auth_no_account: '首次使用？创建账户', auth_have_account: '我已有账户', auth_sent_confirm: '账户已创建。如收到确认邮件，请点击其中的链接，然后登录。', auth_sent_reset: '邮件已发送：打开链接以设置新密码。', auth_not_allowed: '您的邮箱尚未获得授权。请联系 HSE 管理员添加后再登录。', auth_newpass: '设置新密码', auth_save_pass: '保存密码', auth_hint: '仅限 HSE 管理员授权的邮箱访问。', auth_err_bad: '邮箱或密码错误', auth_err_unconfirmed: '邮箱未确认：请查看您的邮箱', auth_err_exists: '该邮箱已存在账户', signed_in_as: '当前登录', role: '角色', pass_changed: '密码已修改', photo: '照片', photo_take: '📷 拍照 / 选择', photo_remove: '✕ 移除', photo_compressing: '压缩中…', photo_uploading: '正在上传照片…', photo_upload_err: '照片未上传（网络？）– 记录已保存但无照片，请稍后重试', photo_err: '图片无法读取', app_title: '救护车 – GMP 管道项目', my_position: '我的位置', mode_custom: '项目地图', mode_sat: '卫星影像', mode_osm: 'Plan (CARTO)',
+    account: '👤 账户', logout: '退出登录', users_title: '🔑 授权用户', users_hint: '只有此列表中的邮箱才能查看和修改数据。每个人之后在登录页面自行设置密码。', user_add: '＋ 授权此邮箱', role_user: '用户', role_admin: '管理员', user_removed: '已移除权限', user_added: '邮箱已授权', confirm_user_remove: '移除此邮箱的访问权限？', auth_title: '登录', auth_email: '电子邮箱', auth_pass: '密码（至少 8 个字符）', auth_name: '显示名称', auth_login: '登录', auth_signup: '创建我的账户', auth_forgot: '忘记密码', auth_send_reset: '发送重置链接', auth_no_account: '首次使用？创建账户', auth_have_account: '我已有账户', auth_sent_confirm: '账户已创建。如收到确认邮件，请点击其中的链接，然后登录。', auth_sent_reset: '邮件已发送：打开链接以设置新密码。', auth_not_allowed: '您的邮箱尚未获得授权。请联系 HSE 管理员添加后再登录。', auth_newpass: '设置新密码', auth_save_pass: '保存密码', auth_hint: '仅限 HSE 管理员授权的邮箱访问。', auth_err_bad: '邮箱或密码错误', auth_err_unconfirmed: '邮箱未确认：请查看您的邮箱', auth_err_exists: '该邮箱已存在账户', signed_in_as: '当前登录', role: '角色', pass_changed: '密码已修改', photo: '照片', photo_take: '📷 拍照 / 选择', photo_remove: '✕ 移除', photo_compressing: '压缩中…', photo_uploading: '正在上传照片…', photo_upload_err: '照片未上传（网络？）– 记录已保存但无照片，请稍后重试', photo_err: '图片无法读取', rt_vehicle: '车辆 / 出发点', rt_destination: '目的地', rt_use_incident: '🚨 事故地点', rt_other_point: '其他出发点（KP / GPS / 地标）', rt_roads_only: '仅走道路（避开 ROW 便道）', app_title: '救护车 – GMP 管道项目', my_position: '我的位置', mode_custom: '项目地图', mode_sat: '卫星影像', mode_osm: 'Plan (CARTO)',
     tab_fleet: '车队', tab_nearest: '最近车辆', tab_route: '路线', tab_manage: '管理', fleet_list: '救护车列表', legend: '图例',
     st_available: '可用', st_standby: '待命', st_on_mission: '任务中', st_out_of_service: '停用', lg_hv: '重型车道路 (HV)', lg_lv: '轻型车道路 (LV)',
     incident_loc: '事故地点', pick_on_map: '🎯 在地图上点选', available_only: '仅显示可用车辆', clear: '清除',
@@ -1162,7 +1170,7 @@ const I18N = {
     lm_bvs: '阀室', lm_cp: '控制点', lm_camp: '营地', lm_plant: '站场', lm_crossing: '穿越', lm_bore: '钻孔穿越', lm_hdd: '定向钻 (HDD)', remote_deleted: '已被同事删除', remote_updated: '收到更新'
   },
   ar: {
-    account: '👤 الحساب', logout: 'تسجيل الخروج', users_title: '🔑 المستخدمون المخوّلون', users_hint: 'فقط العناوين في هذه القائمة تستطيع رؤية البيانات وتعديلها. كل شخص ينشئ كلمة مروره بنفسه في شاشة الدخول.', user_add: '＋ تخويل هذا العنوان', role_user: 'مستخدم', role_admin: 'مدير', user_removed: 'تم سحب الصلاحية', user_added: 'تم تخويل العنوان', confirm_user_remove: 'سحب صلاحية هذا العنوان؟', auth_title: 'تسجيل الدخول', auth_email: 'البريد الإلكتروني', auth_pass: 'كلمة المرور (8 أحرف على الأقل)', auth_name: 'الاسم الظاهر', auth_login: 'دخول', auth_signup: 'إنشاء حسابي', auth_forgot: 'نسيت كلمة المرور', auth_send_reset: 'إرسال رابط إعادة التعيين', auth_no_account: 'أول مرة؟ أنشئ حساباً', auth_have_account: 'لدي حساب مسبقاً', auth_sent_confirm: 'تم إنشاء الحساب. إذا وصلك بريد تأكيد اضغط الرابط ثم سجّل الدخول.', auth_sent_reset: 'تم إرسال البريد: افتح الرابط لاختيار كلمة مرور جديدة.', auth_not_allowed: 'عنوانك غير مخوّل بعد. اطلب من مدير HSE إضافته ثم سجّل الدخول مجدداً.', auth_newpass: 'اختر كلمة مرور جديدة', auth_save_pass: 'حفظ كلمة المرور', auth_hint: 'الدخول مقتصر على العناوين المخوّلة من مدير HSE.', auth_err_bad: 'البريد أو كلمة المرور غير صحيحة', auth_err_unconfirmed: 'العنوان غير مؤكد: راجع بريدك', auth_err_exists: 'يوجد حساب مسبقاً لهذا العنوان', signed_in_as: 'مسجّل الدخول باسم', role: 'الدور', pass_changed: 'تم تغيير كلمة المرور', photo: 'صورة', photo_take: '📷 التقاط / اختيار', photo_remove: '✕ إزالة', photo_compressing: 'جاري الضغط…', photo_uploading: 'جاري رفع الصورة…', photo_upload_err: 'لم تُرفع الصورة (الشبكة؟) – حُفظت البطاقة بدون صورة، حاول لاحقاً', photo_err: 'تعذر قراءة الصورة', app_title: 'سيارات الإسعاف – مشروع أنابيب GMP', my_position: 'موقعي', mode_custom: 'خارطة المشروع', mode_sat: 'صور فضائية', mode_osm: 'Plan (CARTO)',
+    account: '👤 الحساب', logout: 'تسجيل الخروج', users_title: '🔑 المستخدمون المخوّلون', users_hint: 'فقط العناوين في هذه القائمة تستطيع رؤية البيانات وتعديلها. كل شخص ينشئ كلمة مروره بنفسه في شاشة الدخول.', user_add: '＋ تخويل هذا العنوان', role_user: 'مستخدم', role_admin: 'مدير', user_removed: 'تم سحب الصلاحية', user_added: 'تم تخويل العنوان', confirm_user_remove: 'سحب صلاحية هذا العنوان؟', auth_title: 'تسجيل الدخول', auth_email: 'البريد الإلكتروني', auth_pass: 'كلمة المرور (8 أحرف على الأقل)', auth_name: 'الاسم الظاهر', auth_login: 'دخول', auth_signup: 'إنشاء حسابي', auth_forgot: 'نسيت كلمة المرور', auth_send_reset: 'إرسال رابط إعادة التعيين', auth_no_account: 'أول مرة؟ أنشئ حساباً', auth_have_account: 'لدي حساب مسبقاً', auth_sent_confirm: 'تم إنشاء الحساب. إذا وصلك بريد تأكيد اضغط الرابط ثم سجّل الدخول.', auth_sent_reset: 'تم إرسال البريد: افتح الرابط لاختيار كلمة مرور جديدة.', auth_not_allowed: 'عنوانك غير مخوّل بعد. اطلب من مدير HSE إضافته ثم سجّل الدخول مجدداً.', auth_newpass: 'اختر كلمة مرور جديدة', auth_save_pass: 'حفظ كلمة المرور', auth_hint: 'الدخول مقتصر على العناوين المخوّلة من مدير HSE.', auth_err_bad: 'البريد أو كلمة المرور غير صحيحة', auth_err_unconfirmed: 'العنوان غير مؤكد: راجع بريدك', auth_err_exists: 'يوجد حساب مسبقاً لهذا العنوان', signed_in_as: 'مسجّل الدخول باسم', role: 'الدور', pass_changed: 'تم تغيير كلمة المرور', photo: 'صورة', photo_take: '📷 التقاط / اختيار', photo_remove: '✕ إزالة', photo_compressing: 'جاري الضغط…', photo_uploading: 'جاري رفع الصورة…', photo_upload_err: 'لم تُرفع الصورة (الشبكة؟) – حُفظت البطاقة بدون صورة، حاول لاحقاً', photo_err: 'تعذر قراءة الصورة', rt_vehicle: 'المركبة / نقطة الانطلاق', rt_destination: 'الوجهة', rt_use_incident: '🚨 موقع الحادث', rt_other_point: 'نقطة انطلاق أخرى (KP / GPS / معلم)', rt_roads_only: 'الطرق فقط (تجنب ممر ROW)', app_title: 'سيارات الإسعاف – مشروع أنابيب GMP', my_position: 'موقعي', mode_custom: 'خارطة المشروع', mode_sat: 'صور فضائية', mode_osm: 'Plan (CARTO)',
     tab_fleet: 'الأسطول', tab_nearest: 'الأقرب', tab_route: 'المسار', tab_manage: 'الإدارة', fleet_list: 'قائمة سيارات الإسعاف', legend: 'الدليل',
     st_available: 'جاهزة', st_standby: 'بالانتظار', st_on_mission: 'بمهمة', st_out_of_service: 'خارج الخدمة', lg_hv: 'طريق المركبات الثقيلة (HV)', lg_lv: 'طريق المركبات الخفيفة (LV)',
     incident_loc: 'موقع الحادث', pick_on_map: '🎯 اضغط على الخارطة', available_only: 'الجاهزة فقط', clear: 'مسح',
@@ -1406,6 +1414,7 @@ const MapView = {
     L.control.scale({ imperial: false, position: 'bottomleft' }).addTo(this.map);
     if (view) this.map.setView(this.toML(view.c.lat, view.c.lon));
     this.map.on('click', e => { if (this.pickHandler) { const h = this.pickHandler; this.setPick(null); h(this.fromML(e.latlng)); } });
+    this.map.createPane('route'); this.map.getPane('route').style.zIndex = 450;   // above overlays, below markers
     this.layers = {}; for (const k of ['erw', 'roads', 'lines', 'kp', 'lm', 'amb', 'tools']) this.layers[k] = L.layerGroup().addTo(this.map);
     this.map.on('zoomend', () => this.updateKPVisibility());
     this.drawStatic();
@@ -1538,15 +1547,17 @@ const App = {
     document.getElementById('tabs').addEventListener('click', e => { if (window.innerWidth < 768 && e.target.id !== 'sheet-toggle') panel.classList.remove('closed'); });
     document.getElementById('sheet-toggle').onclick = e => { e.stopPropagation(); panel.classList.toggle('closed'); };
     document.getElementById('btn-lang').onchange = e => { LANG = e.target.value; localStorage.setItem('amb.lang', LANG); location.reload(); };
-    document.getElementById('map-mode').onchange = e => { Store.settings.mapMode = e.target.value; Store.commitLocal(); MapView.build(e.target.value); this.renderAll(); this.drawTools(); };
+    document.getElementById('map-mode').onchange = e => { Store.settings.mapMode = e.target.value; Store.commitLocal(); MapView.build(e.target.value); this.renderAll(); this.drawTools(); if (this.route.A && this.route.B) this.fitRoute(); };
     document.getElementById('btn-locate').onclick = () => navigator.geolocation ? navigator.geolocation.getCurrentPosition(p => { const loc = enrich({ lat: p.coords.latitude, lon: p.coords.longitude }); MapView.focus(loc.lat, loc.lon); L.circleMarker(MapView.toML(loc.lat, loc.lon), { radius: 9, color: '#fff', fillColor: '#2563eb', fillOpacity: 1 }).bindTooltip(`${t('my_position')}<br>${locText(loc)}`).addTo(MapView.layers.tools).openTooltip(); toast(t('gps_ok')); }, () => toast(t('gps_err')), { enableHighAccuracy: true, timeout: 10000 }) : toast(t('gps_err'));
     document.getElementById('btn-inc-click').onclick = () => MapView.setPick(loc => this.setIncident(enrich(loc)));
     document.getElementById('btn-inc-clear').onclick = () => { this.incident = null; this.ranks = {}; this.renderNearest(); this.drawTools(); MapView.drawAmbulances(this.selectedId, {}); };
     document.getElementById('inc-avail-only').onchange = () => this.renderNearest();
     document.querySelectorAll('[data-pick="A"],[data-pick="B"]').forEach(b => b.onclick = () => { b.classList.add('active'); MapView.setPick(loc => this.setRoutePoint(b.dataset.pick, enrich(loc))); });
-    for (const k of ['A', 'B']) document.getElementById('rt-amb-' + k).onchange = e => { const a = Store.ambulances.find(x => x.id === e.target.value); if (a) this.setRoutePoint(k, { ...a.location, label: a.callsign }); };
-    document.getElementById('btn-route-swap').onclick = () => { [this.route.A, this.route.B] = [this.route.B, this.route.A]; this.route.osrm = null; this.renderRoute(); };
-    document.getElementById('btn-route-clear').onclick = () => { this.route = { A: null, B: null, osrm: null, net: null }; this.renderRoute(); };
+    document.getElementById('rt-amb-A').onchange = e => { const a = Store.ambulances.find(x => x.id === e.target.value); if (a && a.location) this.setRoutePoint('A', { ...a.location, label: a.callsign, ambId: a.id }); };
+    document.getElementById('btn-route-inc').onclick = () => { if (this.incident) this.setRoutePoint('B', { ...this.incident, label: this.incident.label || t('incident_loc') }); else { this.showTab('nearest'); toast(t('nearest_none'), 2500); } };
+    document.getElementById('rt-roads-only').onchange = () => { this.route.osrm = null; this.renderRoute(); };
+    document.getElementById('btn-route-swap').onclick = () => { [this.route.A, this.route.B] = [this.route.B, this.route.A]; this.route.osrm = null; document.getElementById('rt-amb-A').value = (this.route.A && this.route.A.ambId) || ''; this.renderRoute(); };
+    document.getElementById('btn-route-clear').onclick = () => { this.route = { A: null, B: null, osrm: null, net: null }; document.getElementById('rt-amb-A').value = ''; this.renderRoute(); };
     document.getElementById('btn-route-osrm').onclick = () => this.fetchOSRM();
     document.getElementById('btn-add').onclick = () => this.openForm(null);
     document.getElementById('btn-export').onclick = () => { const b = new Blob([Store.exportJSON()], { type: 'application/json' }); const a = document.createElement('a'); a.href = URL.createObjectURL(b); a.download = `ambulances_${new Date().toISOString().slice(0, 10)}.json`; a.click(); };
@@ -1627,7 +1638,7 @@ const App = {
     d.querySelector('#d-edit').onclick = () => this.openForm(a.id);
     if (a.photo) Photos.show(d.querySelector('#d-photo'), a.photo);
     d.querySelector('#d-close').onclick = () => { this.selectedId = null; this.renderFleet(); MapView.drawAmbulances(null, this.ranks); };
-    d.querySelector('#d-setA').onclick = () => { this.setRoutePoint('A', { ...a.location, label: a.callsign }); this.showTab('route'); };
+    d.querySelector('#d-setA').onclick = () => { document.getElementById('rt-amb-A').value = a.id; this.setRoutePoint('A', { ...a.location, label: a.callsign, ambId: a.id }); this.showTab('route'); };
     d.querySelector('#d-inc').onclick = () => { this.setIncident({ ...a.location, label: a.callsign }); this.showTab('nearest'); };
     d.querySelector('#d-status').onchange = e => { a.status = e.target.value; Store.upsert(a); };
   },
@@ -1658,7 +1669,7 @@ const App = {
   },
 
   /* ---- Route A → B ---- */
-  renderRouteSelects() { for (const k of ['A', 'B']) { const s = document.getElementById('rt-amb-' + k); s.innerHTML = `<option value="">${t('choose_amb')}</option>` + Store.ambulances.map(a => `<option value="${a.id}">${esc(a.callsign)} (${a.type})</option>`).join(''); } },
+  renderRouteSelects() { const s = document.getElementById('rt-amb-A'); const cur = s.value; s.innerHTML = `<option value="">${t('choose_amb')}</option>` + Store.ambulances.map(a => `<option value="${a.id}">${esc(a.callsign)} (${a.type}) – ${t('st_' + a.status)}</option>`).join(''); s.value = cur; },
   setRoutePoint(k, loc) { this.route[k] = loc; this.route.osrm = null; this.showTab('route'); this.renderRoute(); if (!(this.route.A && this.route.B)) MapView.focus(loc.lat, loc.lon); },
   renderRoute() {
     for (const k of ['A', 'B']) document.getElementById('rt-sum-' + k).innerHTML = this.route[k] ? locText(this.route[k]) : '';
@@ -1666,18 +1677,18 @@ const App = {
     if (!(A && B)) { res.classList.add('hidden'); this.route.net = null; this.drawTools(); return; }
     res.classList.remove('hidden');
     const d = Geo.haversine(A.lat, A.lon, B.lat, B.lon), s = Store.settings;
-    const net = this.route.net = Router.route(A, B);
+    const net = this.route.net = Router.route(A, B, { roadsOnly: document.getElementById('rt-roads-only').checked });
     const dKP = (A.line && A.line === B.line) ? Math.abs(A.kp - B.kp) * 1000 : null;
     const row = (label, dist, min, note = '') => `<tr class="border-t"><td class="py-1 pr-2 font-bold text-slate-600">${label}</td><td class="py-1 font-black text-slate-900 whitespace-nowrap">${fmtDist(dist)}</td><td class="py-1 font-black text-red-700 whitespace-nowrap">${fmtTime(min)}</td></tr>${note ? `<tr><td colspan="3" class="text-xs text-slate-500 pb-1">${note}</td></tr>` : ''}`;
-    res.innerHTML = `<div class="font-black text-slate-800 mb-1">${t('distance')} / ${t('eta')}</div><table class="w-full text-sm"><tbody>
+    res.innerHTML = `<div class="font-black text-slate-800 mb-1">${esc(A.label || 'A')} → ${esc(B.label || (B.line ? Geo.fmtKP(B.kp) : 'B'))}</div><table class="w-full text-sm"><tbody>
       ${net ? row('🛣 ' + t('network'), net.dist, net.time / 60, `${t('via')} HV ${fmtDist(net.byClass[0])} @${s.speedHV} · LV ${fmtDist(net.byClass[1])} @${s.speedLV} · ROW ${fmtDist(net.byClass[2])} @${s.speedROW} km/h`) : row(t('detour_note') + ' ×' + s.detour, d * s.detour, d * s.detour / 1000 / s.speedLV * 60, t('no_network'))}
       ${row('📐 ' + t('straight'), d, d / 1000 / s.speedLV * 60, `@${s.speedLV} km/h`)}
       ${dKP != null ? row('📏 ' + t('along_row'), dKP, dKP / 1000 / s.speedROW * 60, `@${s.speedROW} km/h`) : ''}
       ${osrm ? row('🌐 ' + t('osrm'), osrm.distance, osrm.duration / 60) : ''}
     </tbody></table>`;
-    this.drawTools();
-    const g = L.latLngBounds([MapView.toML(A.lat, A.lon), MapView.toML(B.lat, B.lon)]); if (net) net.coords.forEach(c => g.extend(MapView.toML(c[0], c[1]))); MapView.map.fitBounds(g.pad(0.2), MapView.fitPad());
+    this.drawTools(); this.fitRoute();
   },
+  fitRoute() { const { A, B, net } = this.route; if (!(A && B)) return; const g = L.latLngBounds([MapView.toML(A.lat, A.lon), MapView.toML(B.lat, B.lon)]); if (net) net.coords.forEach(c => g.extend(MapView.toML(c[0], c[1]))); MapView.map.fitBounds(g.pad(0.2), MapView.fitPad()); },
   async fetchOSRM() {
     const { A, B } = this.route; if (!(A && B)) return;
     if (MapView.mode === 'custom') { toast(t('osrm_only_osm'), 3000); return; }
@@ -1691,17 +1702,29 @@ const App = {
   drawTools() {
     const T = MapView.layers.tools; T.clearLayers();
     const { A, B, osrm, net } = this.route;
+    document.getElementById('map').classList.toggle('route-on', !!(A && B && net));
     if (this.incident) {
       const ll = MapView.toML(this.incident.lat, this.incident.lon);
       L.marker(ll, { icon: MapView.pointIcon('!', '#dc2626'), zIndexOffset: 2000 }).bindTooltip(`🚨 ${t('incident_loc')}<br>${locText(this.incident)}`).addTo(T);
-      Store.ambulances.filter(a => this.ranks[a.id]).forEach(a => { const r = Router.route(this.incident, a.location); L.polyline(r ? MapView.arr(r.coords) : [ll, MapView.toML(a.location.lat, a.location.lon)], { color: '#dc2626', weight: 3, dashArray: r ? null : '4 6', opacity: .85 }).addTo(T); });
+      Store.ambulances.filter(a => this.ranks[a.id]).forEach(a => { const r = Router.route(this.incident, a.location); L.polyline(r ? MapView.arr(r.coords) : [ll, MapView.toML(a.location.lat, a.location.lon)], { pane: 'route', color: '#dc2626', weight: 4, dashArray: r ? null : '4 6', opacity: .9 }).addTo(T); });
     }
     if (A) L.marker(MapView.toML(A.lat, A.lon), { icon: MapView.pointIcon('A', '#2563eb'), zIndexOffset: 2000 }).bindTooltip(`A<br>${locText(A)}`).addTo(T);
     if (B) L.marker(MapView.toML(B.lat, B.lon), { icon: MapView.pointIcon('B', '#7c3aed'), zIndexOffset: 2000 }).bindTooltip(`B<br>${locText(B)}`).addTo(T);
     if (A && B) {
-      L.polyline([MapView.toML(A.lat, A.lon), MapView.toML(B.lat, B.lon)], { color: '#2563eb', weight: 2, dashArray: '2 8' }).addTo(T);
-      if (net) L.polyline(MapView.arr(net.coords), { color: '#2563eb', weight: 5, opacity: .9 }).addTo(T);
-      if (osrm && MapView.mode !== 'custom') L.polyline(osrm.coords, { color: '#7c3aed', weight: 4, opacity: .7, dashArray: '6 6' }).addTo(T);
+      L.polyline([MapView.toML(A.lat, A.lon), MapView.toML(B.lat, B.lon)], { pane: 'route', color: '#64748b', weight: 2, dashArray: '2 8', opacity: .7 }).addTo(T);
+      if (net) {
+        const pts = MapView.arr(net.coords);
+        L.polyline(pts, { pane: 'route', color: '#ffffff', weight: 14, opacity: .95, lineCap: 'round', lineJoin: 'round' }).addTo(T);   // white casing
+        L.polyline(pts, { pane: 'route', color: '#ff00c8', weight: 7, opacity: 1, lineCap: 'round', lineJoin: 'round' }).addTo(T);      // magenta core (absent from basemaps)
+        L.polyline(pts, { pane: 'route', color: '#ffffff', weight: 2, opacity: .9, dashArray: '1 14', lineCap: 'round' }).addTo(T);       // dotted centre line
+        // direction chevrons every ~1/6 of the route
+        const step = Math.max(1, Math.floor(pts.length / 6));
+        for (let i = step; i < pts.length - 1; i += step) {
+          const p1 = MapView.map.latLngToLayerPoint(pts[i - 1]), p2 = MapView.map.latLngToLayerPoint(pts[i]), ang = Math.atan2(p2.y - p1.y, p2.x - p1.x) * 180 / Math.PI;
+          L.marker(pts[i], { icon: L.divIcon({ className: '', html: `<div style="transform:rotate(${ang}deg);width:22px;height:22px;display:flex;align-items:center;justify-content:center;font-size:18px;font-weight:900;color:#fff;text-shadow:0 0 3px #ff00c8,0 0 3px #ff00c8">➤</div>`, iconSize: [22, 22], iconAnchor: [11, 11] }), interactive: false }).addTo(T);
+        }
+      }
+      if (osrm && MapView.mode !== 'custom') L.polyline(osrm.coords, { pane: 'route', color: '#7c3aed', weight: 4, opacity: .7, dashArray: '6 6' }).addTo(T);
     }
   },
 
