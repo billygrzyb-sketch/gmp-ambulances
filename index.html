@@ -728,12 +728,13 @@ svg.leaflet-image-layer.leaflet-interactive path {
   .route-on .leaflet-basemap-pane { opacity: .8; }
   .scrollarea { overflow-y: auto; -webkit-overflow-scrolling: touch; }
   .legend-swatch { display: inline-block; width: 14px; height: 14px; border-radius: 50%; border: 2px solid #fff; box-shadow: 0 0 0 1px #334155; vertical-align: middle; }
-  .sec-box { background: #7cb342; color: #fff; border: 2px solid #fff; border-radius: 3px; padding: 2px 6px; box-shadow: 0 1px 4px rgba(0,0,0,.5); white-space: nowrap; line-height: 1.15; opacity: .95; }
-  .sec-name { font-weight: 900; font-size: 13px; }
-  .sec-kp { font-size: 9px; font-weight: 600; }
-  .xing-box { background: #2f3fb8; color: #fff; border: 2px solid #fff; border-radius: 3px; padding: 1px 6px; font-weight: 800; font-size: 10px; box-shadow: 0 1px 4px rgba(0,0,0,.5); white-space: nowrap; }
+  .sec-box { display: inline-block; background: #7cb342; color: #fff; border: 2px solid #fff; border-radius: 3px; padding: 2px 6px; box-shadow: 0 1px 4px rgba(0,0,0,.5); white-space: nowrap; line-height: 1.15; opacity: .95; }
+  .sec-name { font-weight: 900; font-size: 14px; }
+  .sec-kp { font-size: 10px; font-weight: 600; }
+  .xing-box { display: inline-block; background: #2f3fb8; color: #fff; border: 2px solid #fff; border-radius: 3px; padding: 1px 6px; font-weight: 800; font-size: 11px; box-shadow: 0 1px 4px rgba(0,0,0,.5); white-space: nowrap; }
   .z-far .sec-kp { display: none; } .z-far .sec-name { font-size: 11px; } .z-far .xing-box { font-size: 8px; padding: 0 4px; }
   .z-veryfar .xing-box { display: none; } .z-veryfar .sec-box { display: none; }
+  .z-far .leaflet-tooltip.kp-tt, .z-far .lm-label { display: none; }   /* far view: keep the map readable (labels return on zoom-in) */
   .erw-band { display: inline-block; width: 26px; height: 8px; border-radius: 4px; opacity: .7; border: 1px solid #334155; vertical-align: middle; }
   /* RTL (Arabic): text flips, map itself stays LTR, panel stays on the left */
   .rtl #map, .rtl .leaflet-container { direction: ltr; }
@@ -1467,7 +1468,7 @@ const MapView = {
       if (lm.type === 'crossing') continue;   // drawn in the 'labels' layer (blue boxes)
       const minor = lm.type === 'cp' || lm.type === 'bore' || lm.type === 'hdd';
       if (minor) L.circleMarker(this.toML(lm.lat, lm.lon), { radius: 3, color: '#0f172a', fillColor: lm.type === 'cp' ? '#fde047' : '#94a3b8', fillOpacity: 1, weight: 1 }).bindTooltip(`${ico} ${t('lm_' + lm.type)} ${esc(lm.name)}${lm.elev ? ' · ' + lm.elev + ' m' : ''}`).addTo(this.layers.lm);
-      else L.marker(this.toML(lm.lat, lm.lon), { icon: L.divIcon({ className: '', html: `<div class="lm-label">${ico} ${esc(lm.name)}</div>`, iconAnchor: [0, 8] }), interactive: false, opacity: custom && lm.type !== 'bvs' ? 0 : 1 }).addTo(this.layers.lm);
+      else L.marker(this.toML(lm.lat, lm.lon), { icon: L.divIcon({ className: '', html: `<div class="lm-label">${ico} ${esc(lm.name)}</div>`, iconSize: null, iconAnchor: [0, 8] }), interactive: false, opacity: custom && lm.type !== 'bvs' ? 0 : 1 }).addTo(this.layers.lm);
     }
     if (s.labels !== false) {
       const fk = kp => Geo.fmtKP(kp).slice(3);
@@ -1478,12 +1479,12 @@ const MapView = {
         const main = parts.find(p => p.lid === 'majnoon') || parts[0];
         const g = Geo.kpToLL(main.lid, (main.a + main.b) / 2);
         const lines = parts.map(p => `<div class="sec-kp">${MAP_DATA.lines[p.lid].label.split(' ')[0]} KP ${fk(p.a)} – ${fk(p.b)}</div>`).join('');
-        L.marker(this.toML(g.lat, g.lon), { icon: L.divIcon({ className: '', html: `<div class="sec-box"><div class="sec-name">${esc(name)}</div>${lines}</div>`, iconAnchor: [0, 0] }), interactive: false, zIndexOffset: -500 }).addTo(this.layers.labels);
+        L.marker(this.toML(g.lat, g.lon), { icon: L.divIcon({ className: '', html: `<div class="sec-box"><div class="sec-name">${esc(name)}</div>${lines}</div>`, iconSize: null, iconAnchor: [0, 0] }), interactive: false, zIndexOffset: -500 }).addTo(this.layers.labels);
       }
       // crossings: blue boxes at their official position
       for (const lm of MAP_DATA.landmarks) if (lm.type === 'crossing') {
         const kp = (lm.kp != null ? Geo.fmtKP(lm.kp) : '') + (lm.kp2 != null ? ' · WQ2 ' + Geo.fmtKP(lm.kp2) : '');
-        L.marker(this.toML(lm.lat, lm.lon), { icon: L.divIcon({ className: '', html: `<div class="xing-box">${esc(lm.name.toUpperCase())}</div>`, iconAnchor: [-6, 10] }), zIndexOffset: -400 }).bindTooltip(`${esc(lm.name)}${kp ? '<br>' + kp : ''}`).addTo(this.layers.labels);
+        L.marker(this.toML(lm.lat, lm.lon), { icon: L.divIcon({ className: '', html: `<div class="xing-box">${esc(lm.name.toUpperCase())}</div>`, iconSize: null, iconAnchor: [-6, 10] }), zIndexOffset: -400 }).bindTooltip(`${esc(lm.name)}${kp ? '<br>' + kp : ''}`).addTo(this.layers.labels);
       }
     }
     this.updateKPVisibility();
